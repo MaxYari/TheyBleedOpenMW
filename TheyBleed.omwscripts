@@ -1,0 +1,4 @@
+GLOBAL: scripts/MaxYari/TheyBleed/global.lua
+PLAYER: scripts/MaxYari/TheyBleed/player.lua
+NPC,CREATURE,PLAYER: scripts/MaxYari/TheyBleed/actor.lua
+MENU: scripts/MaxYari/TheyBleed/menu.lua

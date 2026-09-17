@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Generate blood droplet-cluster textures (DDS) and matching decal quads (NIF 4.0.0.2).
 
-Stdlib only. Run from anywhere:  python3 tools/generate_assets.py [--seed N] [--count N]
-Also writes tools/preview.png (contact sheet) for eyeballing the textures.
+Stdlib only. Run from anywhere:  python3 tools/generate_assets.py [--seed N]
+Also writes tools/preview_<family>.png contact sheets (one row per blood colour) for eyeballing the textures.
+Variant counts per family and the colour names live in FAMILIES / COLORS and must match the Lua scripts.
 """
 import argparse
 import math
@@ -12,14 +13,38 @@ import struct
 import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TEX_DIR = os.path.join(ROOT, "textures", "MaxYari", "BloodDecals")
-MESH_DIR = os.path.join(ROOT, "meshes", "MaxYari", "BloodDecals")
+TEX_DIR = os.path.join(ROOT, "textures", "MaxYari", "TheyBleed")
+MESH_DIR = os.path.join(ROOT, "meshes", "MaxYari", "TheyBleed")
 
-TEX_SIZE = 128
-QUAD_SIZE = 16.0  # game units, edge length of the quad before per-instance scaling
+# name -> texture size (px), quad edge length (game units, before per-instance scaling), variant count.
+# Keep texel density similar between families so ripples and droplet edges read the same in world space.
+FAMILIES = {
+    "drops": dict(tex_size=128, quad_size=16.0, count=12),  # small droplet clusters
+    "pool": dict(tex_size=256, quad_size=40.0, count=8),    # bigger agglomerations
+}
 
-EDGE_COLOR = (120, 14, 12)  # thin blood at droplet edges
-CORE_COLOR = (62, 3, 5)     # thick blood in droplet centres
+# Blood colours: (thin edge, thick core). Every colour gets the same droplet shapes.
+# Non-red colours match Diverse Blood's effect textures (sampled dense-texel colour in comments), kept as dark as red.
+COLORS = {
+    "red": ((60, 2, 4), (40, 1, 3)),        # vanilla tx_blood (62, 0, 0)
+    "blue": ((0, 50, 62), (0, 32, 41)),      # blood_blue (0, 56, 67)
+    "green": ((20, 58, 2), (12, 38, 1)),     # blood_green (21, 66, 0)
+    "dark": ((16, 5, 4), (7, 2, 2)),         # blood_dark (7, 0, 0): near-black ichor
+    "orange": ((150, 50, 2), (104, 32, 1)),  # blood_orange (213, 70, 0), toned down so it reads as liquid, not paint
+}
+VARIANT_SHADE = (0.72, 1.12)  # per-texture brightness multipliers, spread evenly across a family's variants
+THICK_RIM_PX = 9.0        # texels from the edge until blood reaches the core colour; tiny droplets stay edge-coloured
+
+# PBR spec map (Wareya PBR): R metal, G roughness (squared by the shader), B ambient occlusion
+ROUGHNESS = 0.02          # effective roughness after the shader squares G; near-mirror wet surface
+METALNESS = 0.0           # liquid is dielectric; raising this trades diffuse colour for red-tinted reflections
+
+# Normal map: flat liquid film with subtle surface ripples, so highlights wobble instead of mirroring flatly
+RIPPLE_WAVES = 7                  # summed plane waves per texture
+RIPPLE_WAVELENGTH = (10.0, 36.0)  # texels
+RIPPLE_SLOPE = 0.06               # max surface slope contributed by all waves together
+NORMAL_MAX_SIZE = 128             # ripples are smooth, so big decals don't need full-res normal maps
+SPEC_SIZE = 4                     # spec values are constant; a tiny map is enough
 
 
 # ---------------------------------------------------------------- textures
@@ -29,11 +54,11 @@ def make_droplet(rng, cx, cy, r):
     stretch = rng.uniform(1.0, 1.35)
     stretch_dir = rng.uniform(0, math.pi)
     return dict(cx=cx, cy=cy, r=r, harmonics=harmonics, stretch=stretch,
-                cos=math.cos(stretch_dir), sin=math.sin(stretch_dir), shade=rng.uniform(0.85, 1.1))
+                cos=math.cos(stretch_dir), sin=math.sin(stretch_dir), shade=rng.uniform(0.93, 1.06))
 
 
-def make_cluster(rng):
-    half = TEX_SIZE / 2
+def make_cluster(rng, size):
+    half = size / 2
     drops = []
     main_r = rng.uniform(9, 20)
     # a few overlapping lobes form the main blob
@@ -58,11 +83,56 @@ def make_cluster(rng):
     return drops
 
 
-def render_cluster(drops):
-    n = TEX_SIZE
+def make_pool(rng, size):
+    """A large irregular puddle built from many overlapping lobes, with splatter around it."""
+    half = size / 2
+    drops = []
+    spread = rng.uniform(22, 42)
+    lobe_r = (rng.uniform(14, 20), rng.uniform(26, 40))
+    for _ in range(rng.randint(5, 10)):
+        a = rng.uniform(0, math.tau)
+        d = abs(rng.gauss(0, spread))
+        r = rng.uniform(*lobe_r)
+        d = min(d, half - r * 1.5 - 6)
+        drops.append(make_droplet(rng, half + math.cos(a) * d, half + math.sin(a) * d, r))
+    # runs/fingers leaking out from the pool edge
+    for _ in range(rng.randint(2, 6)):
+        a = rng.uniform(0, math.tau)
+        d0 = spread + rng.uniform(5, 25)
+        r = rng.uniform(6, 12)
+        for step in range(rng.randint(2, 5)):
+            d = min(d0 + step * r * 1.1, half - r * 1.5 - 4)
+            drops.append(make_droplet(rng, half + math.cos(a) * d, half + math.sin(a) * d, r))
+            r *= rng.uniform(0.65, 0.9)
+    # satellites and specks
+    bias = rng.uniform(0, math.tau)
+    for _ in range(rng.randint(15, 35)):
+        a = bias + rng.gauss(0, 1.6)
+        d = spread + rng.uniform(15, half - 10)
+        r = max(1.2, rng.uniform(1.5, 8) * (1 - min(d, half) / (half * 1.4)))
+        d = min(d, half - r * 1.5 - 3)
+        drops.append(make_droplet(rng, half + math.cos(a) * d, half + math.sin(a) * d, r))
+    return drops
+
+
+def make_ripples(rng):
+    waves = []
+    for _ in range(RIPPLE_WAVES):
+        a = rng.uniform(0, math.tau)
+        k = math.tau / rng.uniform(*RIPPLE_WAVELENGTH)
+        waves.append((math.cos(a) * k, math.sin(a) * k, rng.uniform(0.4, 1.0), rng.uniform(0, math.tau)))
+    # normalise so the steepest possible combined slope equals RIPPLE_SLOPE
+    total = sum(amp * math.hypot(kx, ky) for kx, ky, amp, _ in waves)
+    return [(kx, ky, amp * RIPPLE_SLOPE / total, ph) for kx, ky, amp, ph in waves]
+
+
+def render_shape(drops, size):
+    """Colour-independent fields: coverage, thickness (0 edge .. 1 core) and brightness per texel."""
+    n = size
     cover = [0.0] * (n * n)
     thick = [0.0] * (n * n)
-    shade = [1.0] * (n * n)
+    shade_sum = [0.0] * (n * n)
+    shade_w = [0.0] * (n * n)
     for dr in drops:
         rmax = dr["r"] * dr["stretch"] * 1.6 + 2
         x0, x1 = max(0, int(dr["cx"] - rmax)), min(n, int(dr["cx"] + rmax) + 1)
@@ -81,42 +151,87 @@ def render_cluster(drops):
                 if c <= 0:
                     continue
                 i = y * n + x
-                t = min(1.0, max(0.0, (radius - dist) / max(radius, 1e-3)))
+                inside = radius - dist
+                # thickness from distance to this droplet's edge in texels, so merged lobes share one flat interior
+                t = min(1.0, max(0.0, inside / THICK_RIM_PX))
                 if c > cover[i]:
                     cover[i] = c
                 if t > thick[i]:
                     thick[i] = t
-                    shade[i] = dr["shade"]
-    pixels = []
-    for i in range(n * n):
+                # blend brightness of overlapping droplets so merged lobes don't show hard patches
+                w = c * (t + 0.05)
+                shade_sum[i] += dr["shade"] * w
+                shade_w[i] += w
+
+    shade = [shade_sum[i] / shade_w[i] if shade_w[i] > 0 else 1.0 for i in range(n * n)]
+    return cover, thick, shade
+
+
+def colorize(shape, color, variant_shade):
+    cover, thick, shade = shape
+    edge, core = color
+    diffuse = []
+    for i in range(len(cover)):
         t = thick[i] ** 0.6
         t = t * t * (3 - 2 * t)
-        rgb = tuple(min(255.0, (e + (c - e) * t) * shade[i]) for e, c in zip(EDGE_COLOR, CORE_COLOR))
-        alpha = cover[i] * (0.82 + 0.16 * t)
-        pixels.append((rgb[0], rgb[1], rgb[2], alpha * 255))
-    return pixels
+        k = shade[i] * variant_shade
+        rgb = tuple(min(255.0, (e + (c - e) * t) * k) for e, c in zip(edge, core))
+        diffuse.append((rgb[0], rgb[1], rgb[2], cover[i] * (0.9 + 0.1 * t) * 255))
+    return diffuse
 
 
-def downsample(pixels, size):
+def render_normal(ripples, diffuse_size, size):
+    """Ripple normal map at `size`, with ripples defined in diffuse texel units so they match across resolutions."""
+    step = diffuse_size / size
+    normal = []
+    for y in range(size):
+        for x in range(size):
+            px, py = (x + 0.5) * step, (y + 0.5) * step
+            # analytic gradient of the summed waves: h = sum(amp/k * sin(k.p + ph))
+            hx = hy = 0.0
+            for kx, ky, amp, ph in ripples:
+                c = math.cos(kx * px + ky * py + ph) * amp / math.hypot(kx, ky)
+                hx += c * kx
+                hy += c * ky
+            # OpenMW wants DirectX-style normal maps: +green points toward the bottom of the image,
+            # which is also +row here, so both axes use the plain downhill gradient
+            nx, ny, nz = -hx, -hy, 1.0
+            ln = math.sqrt(nx * nx + ny * ny + nz * nz)
+            normal.append(((nx / ln * 0.5 + 0.5) * 255, (ny / ln * 0.5 + 0.5) * 255, (nz / ln * 0.5 + 0.5) * 255, 255.0))
+    return normal
+
+
+def render_spec():
+    return [(METALNESS * 255, math.sqrt(ROUGHNESS) * 255, 255.0, 255.0)] * (SPEC_SIZE * SPEC_SIZE)
+
+
+def downsample(pixels, size, weights=None, renormalize=False):
     half = size // 2
     out = []
     for y in range(half):
         for x in range(half):
-            quad = [pixels[(y * 2 + dy) * size + x * 2 + dx] for dy in (0, 1) for dx in (0, 1)]
-            a_sum = sum(p[3] for p in quad)
-            if a_sum > 0:  # alpha-weighted colour keeps transparent texels from darkening edges
-                rgb = [sum(p[c] * p[3] for p in quad) / a_sum for c in range(3)]
-            else:
-                rgb = [sum(p[c] for p in quad) / 4 for c in range(3)]
-            out.append((rgb[0], rgb[1], rgb[2], a_sum / 4))
+            idx = [(y * 2 + dy) * size + x * 2 + dx for dy in (0, 1) for dx in (0, 1)]
+            quad = [pixels[j] for j in idx]
+            w = [weights[j] for j in idx] if weights else [1.0] * 4
+            w_sum = sum(w)
+            if w_sum <= 0:  # fully transparent block: plain average
+                w, w_sum = [1.0] * 4, 4.0
+            # coverage-weighted colour keeps transparent texels from bleeding into edges at low mips
+            rgb = [sum(p[c] * wi for p, wi in zip(quad, w)) / w_sum for c in range(3)]
+            if renormalize:
+                v = [c / 127.5 - 1 for c in rgb]
+                ln = math.sqrt(sum(c * c for c in v)) or 1.0
+                rgb = [(c / ln + 1) * 127.5 for c in v]
+            out.append((rgb[0], rgb[1], rgb[2], sum(p[3] for p in quad) / 4))
     return out
 
 
-def write_dds(path, pixels, size):
+def write_dds(path, pixels, size, renormalize=False):
+    """Uncompressed A8R8G8B8 with the full mip chain down to 1x1; colour averaging is weighted by alpha."""
     levels = [pixels]
     s = size
     while s > 1:
-        levels.append(downsample(levels[-1], s))
+        levels.append(downsample(levels[-1], s, [p[3] for p in levels[-1]], renormalize))
         s //= 2
     DDSD = 0x1 | 0x2 | 0x4 | 0x8 | 0x1000 | 0x20000
     header = struct.pack("<4sIIIIIII44x", b"DDS ", 124, DDSD, size, size, size * 4, 0, len(levels))
@@ -131,8 +246,7 @@ def write_dds(path, pixels, size):
         f.write(header + body)
 
 
-def write_preview(path, textures, cols=4):
-    n = TEX_SIZE
+def write_preview(path, textures, n, cols=4):
     rows = (len(textures) + cols - 1) // cols
     w, h = cols * n, rows * n
     bg = (205, 195, 175)
@@ -197,14 +311,17 @@ def av_object(name, flags, properties, extra=-1):
     return d
 
 
-def write_quad_nif(path, texture_path):
+def write_quad_nif(path, texture_path, quad_size):
     nif = Nif()
-    h = QUAD_SIZE / 2
+    h = quad_size / 2
     # indices are fixed by insertion order below
-    ROOT, EXTRA, SHAPE, TEXPROP, MATPROP, ALPHAPROP, ZPROP, DATA, SOURCE = range(9)
+    ROOT, EXTRA, SWITCH, SHAPE, TEXPROP, MATPROP, ALPHAPROP, ZPROP, DATA, SOURCE = range(10)
 
-    nif.add("NiNode", av_object("BloodDecal", 0x000C, [], extra=EXTRA) + struct.pack("<IiI", 1, SHAPE, 0))
+    nif.add("NiNode", av_object("BloodDecal", 0x000C, [], extra=EXTRA) + struct.pack("<IiI", 1, SWITCH, 0))
     nif.add("NiStringExtraData", struct.pack("<iI", -1, len("NCO") + 4) + sstr("NCO"))  # no collision
+    # Collision switch with the active-collision flag (0x20) cleared: OpenMW gives this subtree the effect
+    # node mask, which keeps decals out of shadow casting and out of rendering raycasts.
+    nif.add("NiCollisionSwitch", av_object("DecalSwitch", 0x000C, []) + struct.pack("<IiI", 1, SHAPE, 0))
     nif.add("NiTriShape", av_object("Decal", 0x0004, [TEXPROP, MATPROP, ALPHAPROP, ZPROP]) + struct.pack("<ii", DATA, -1))
 
     tex = obj_net("") + struct.pack("<HII", 0, 2, 7)  # flags, apply mode MODULATE, texture count
@@ -219,7 +336,7 @@ def write_quad_nif(path, texture_path):
     nif.add("NiMaterialProperty", mat)
 
     # blend SRC_ALPHA / INV_SRC_ALPHA + alpha test GREATER threshold, so fully clear texels are discarded
-    nif.add("NiAlphaProperty", obj_net("") + struct.pack("<HB", 0x12ED, 8))
+    nif.add("NiAlphaProperty", obj_net("") + struct.pack("<HB", 0x12ED, 4))
     # depth test on, depth write off: overlapping decals don't fight each other
     nif.add("NiZBufferProperty", obj_net("") + struct.pack("<H", 0x0001))
 
@@ -249,21 +366,43 @@ def write_quad_nif(path, texture_path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=1337)
-    ap.add_argument("--count", type=int, default=12)
     args = ap.parse_args()
-    rng = random.Random(args.seed)
 
-    os.makedirs(TEX_DIR, exist_ok=True)
-    os.makedirs(MESH_DIR, exist_ok=True)
-    textures = []
-    for i in range(1, args.count + 1):
-        name = f"drops_{i:02d}"
-        pixels = render_cluster(make_cluster(rng))
-        textures.append(pixels)
-        write_dds(os.path.join(TEX_DIR, name + ".dds"), pixels, TEX_SIZE)
-        write_quad_nif(os.path.join(MESH_DIR, name + ".nif"), f"textures\\MaxYari\\BloodDecals\\{name}.dds")
-        print("wrote", name)
-    write_preview(os.path.join(ROOT, "tools", "preview.png"), textures)
+    # generated outputs only: clear old files so renamed/removed variants don't linger
+    for d in (TEX_DIR, MESH_DIR):
+        os.makedirs(d, exist_ok=True)
+        for f in os.listdir(d):
+            # only decal outputs; logo.dds comes from make_logo.py
+            if f.endswith((".dds", ".nif")) and f.startswith(tuple(f"{family}_" for family in FAMILIES)):
+                os.remove(os.path.join(d, f))
+
+    shapes = {"drops": make_cluster, "pool": make_pool}
+    for family, cfg in FAMILIES.items():
+        rng = random.Random(f"{args.seed}:{family}")  # per-family seed: editing one family doesn't reshuffle the other
+        size = cfg["tex_size"]
+        normal_size = min(size, NORMAL_MAX_SIZE)
+        preview = {color: [] for color in COLORS}
+        # evenly spaced shades, shuffled so darkness doesn't correlate with variant index
+        lo, hi = VARIANT_SHADE
+        shades = [lo + (hi - lo) * k / max(1, cfg["count"] - 1) for k in range(cfg["count"])]
+        rng.shuffle(shades)
+        for i in range(1, cfg["count"] + 1):
+            shape = render_shape(shapes[family](rng, size), size)
+            normal = render_normal(make_ripples(rng), size, normal_size)
+            spec = render_spec()
+            for color_name, color in COLORS.items():
+                name = f"{family}_{color_name}_{i:02d}"
+                diffuse = colorize(shape, color, shades[i - 1])
+                preview[color_name].append(diffuse)
+                write_dds(os.path.join(TEX_DIR, name + ".dds"), diffuse, size)
+                # auto-picked up by OpenMW via 'specular map pattern' (_spec) and 'normal map pattern' (_n)
+                write_dds(os.path.join(TEX_DIR, name + "_spec.dds"), spec, SPEC_SIZE)
+                write_dds(os.path.join(TEX_DIR, name + "_n.dds"), normal, normal_size, renormalize=True)
+                write_quad_nif(os.path.join(MESH_DIR, name + ".nif"),
+                               f"textures\\MaxYari\\TheyBleed\\{name}.dds", cfg["quad_size"])
+            print("wrote", family, i)
+        rows = [tex for color_name in COLORS for tex in preview[color_name]]
+        write_preview(os.path.join(ROOT, "tools", f"preview_{family}.png"), rows, size, cols=cfg["count"])
 
 
 if __name__ == "__main__":
