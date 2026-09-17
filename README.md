@@ -12,6 +12,8 @@ The spoils of war taint your surroundings; your violence now leaves bloodied mar
 - Install it like any other OpenMW mod and enable `TheyBleed.omwscripts` in the "Content Files" tab of the OpenMW launcher. If this is your first OpenMW mod, [read this tutorial](https://modding-openmw.com/tips/installing-mods/).
 - Settings are in Options -> Scripts -> They Bleed.
 
+The blood comes with PBR maps made for [Wareya's PBR shaders](https://github.com/wareya/OpenMW-PBR), so it looks wet and glossy with them. It _might_ (or might not) look wrong with [Rafael's shaders](https://www.nexusmods.com/morrowind/mods/53667) or other shaders that read these maps differently. If the blood looks off, delete the `*_spec.dds` files from `textures/MaxYari/TheyBleed/` (they hold the metalness and roughness). The normal maps (`*_n.dds`) are fine and can stay.
+
 To uninstall, set "Max Decals" to 0 and save your game first, so no blood is left behind in your save. Then uninstall the mod.
 
 ## ♦ Compatibility
