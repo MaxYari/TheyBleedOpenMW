@@ -5,6 +5,9 @@ Needs ImageMagick (`magick`) and the DejaVu fonts. Writes:
   textures/MaxYari/TheyBleed/logo.dds  (uncompressed, full mip chain; used by the settings page)
   imgs/they_bleed_logo.png              (same image, for pages/readmes)
 and prints the content rectangle inside the texture, which menu.lua uses to crop the transparent padding.
+
+After editing the PNG by hand, only repack it (the PNG is left untouched):
+  python3 tools/make_logo.py --from-png imgs/they_bleed_logo.png
 """
 import argparse
 import math
@@ -146,12 +149,43 @@ def draw_blob(field, w, h, cx, cy, r):
                 field[i] = c
 
 
+def fit_to_texture(src, dst):
+    """Scale `src` down to fit the TEX_W x TEX_H canvas and centre it there; returns the content rect."""
+    lw, lh = map(int, subprocess.run(["magick", "identify", "-format", "%w %h", src],
+                                     check=True, capture_output=True, text=True).stdout.split())
+    scale = min(1.0, (TEX_W - 8) / lw, (TEX_H - 8) / lh)
+    cw, ch = int(lw * scale), int(lh * scale)
+    magick(src, "-resize", f"{cw}x{ch}!", "-background", "none", "-gravity", "center",
+           "-extent", f"{TEX_W}x{TEX_H}", dst)
+    return (TEX_W - cw) // 2, (TEX_H - ch) // 2, cw, ch
+
+
+def pack_texture(src, tmp):
+    """Writes logo.dds from a hand-edited or rendered logo PNG of any size and prints the rect for menu.lua."""
+    fitted = os.path.join(tmp, "fitted.png")
+    trimmed = os.path.join(tmp, "trimmed.png")
+    magick(src, "-trim", "+repage", trimmed)  # drop transparent padding so the rect is tight
+    ox, oy, cw, ch = fit_to_texture(trimmed, fitted)
+    rgba = subprocess.run(["magick", fitted, "-depth", "8", "rgba:-"], check=True, capture_output=True).stdout
+    pixels = [tuple(rgba[i:i + 4]) for i in range(0, len(rgba), 4)]
+    tex_dir = os.path.join(ROOT, "textures", "MaxYari", "TheyBleed")
+    os.makedirs(tex_dir, exist_ok=True)
+    write_dds_rect(os.path.join(tex_dir, "logo.dds"), pixels, TEX_W, TEX_H)
+    print(f"logo content rect: offset ({ox}, {oy}) size ({cw}, {ch}) in {TEX_W}x{TEX_H}")
+    magick(fitted, "-background", "rgb(28,24,20)", "-flatten", os.path.join(tmp, "preview.png"))
+    print("preview:", os.path.join(tmp, "preview.png"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=13)
+    ap.add_argument("--from-png", metavar="PATH", help="skip rendering, only pack this (hand-edited) PNG into logo.dds")
     args = ap.parse_args()
     rng = random.Random(args.seed)
     tmp = tempfile.mkdtemp(prefix="theybleed_logo_")
+    if args.from_png:
+        pack_texture(args.from_png, tmp)
+        return
     t = lambda name: os.path.join(tmp, name)  # noqa: E731
 
     s = SS
@@ -229,25 +263,11 @@ def main():
            t("outline.png"), "-compose", "over", "-composite", t("color.png"), "-compose", "over", "-composite",
            "-resize", f"{100 // s}%", t("logo_full.png"))
 
-    # 4. fit into the power-of-two texture, export PNG + DDS
-    lw, lh = map(int, subprocess.run(["magick", "identify", "-format", "%w %h", t("logo_full.png")],
-                                     check=True, capture_output=True, text=True).stdout.split())
-    scale = min(1.0, (TEX_W - 8) / lw, (TEX_H - 8) / lh)
-    cw, ch = int(lw * scale), int(lh * scale)
-    ox, oy = (TEX_W - cw) // 2, (TEX_H - ch) // 2
-    os.makedirs(os.path.join(ROOT, "imgs"), exist_ok=True)
+    # 4. export the PNG (padded to the texture canvas) and pack it into the DDS
     png = os.path.join(ROOT, "imgs", "they_bleed_logo.png")
-    magick(t("logo_full.png"), "-resize", f"{cw}x{ch}!", "-background", "none", "-gravity", "center",
-           "-extent", f"{TEX_W}x{TEX_H}", png)
-    rgba = subprocess.run(["magick", png, "-depth", "8", "rgba:-"], check=True, capture_output=True).stdout
-    pixels = [tuple(rgba[i:i + 4]) for i in range(0, len(rgba), 4)]
-    tex_dir = os.path.join(ROOT, "textures", "MaxYari", "TheyBleed")
-    os.makedirs(tex_dir, exist_ok=True)
-    write_dds_rect(os.path.join(tex_dir, "logo.dds"), pixels, TEX_W, TEX_H)
-    print(f"logo content rect: offset ({ox}, {oy}) size ({cw}, {ch}) in {TEX_W}x{TEX_H}")
-    magick(png, "-background", "rgb(28,24,20)", "-flatten", os.path.join(tmp, "preview.png"))
-    print("preview:", os.path.join(tmp, "preview.png"))
-
+    os.makedirs(os.path.dirname(png), exist_ok=True)
+    fit_to_texture(t("logo_full.png"), png)
+    pack_texture(png, tmp)
 
 if __name__ == "__main__":
     main()

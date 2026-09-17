@@ -6,8 +6,8 @@ local util = require('openmw.util')
 -- Content rectangle of the logo inside its 1024x512 texture, as printed by tools/make_logo.py
 local LOGO_TEXTURE = ui.texture {
     path = 'textures/MaxYari/TheyBleed/logo.dds',
-    offset = util.vector2(4, 83),
-    size = util.vector2(1016, 346),
+    offset = util.vector2(4, 109),
+    size = util.vector2(1016, 294),
 }
 local LOGO_WIDTH = 480
 
@@ -22,7 +22,7 @@ I.Settings.registerRenderer('TheyBleedLogo', function()
                 type = ui.TYPE.Image,
                 props = {
                     resource = LOGO_TEXTURE,
-                    size = util.vector2(LOGO_WIDTH, LOGO_WIDTH * 346 / 1016),
+                    size = util.vector2(LOGO_WIDTH, LOGO_WIDTH * 294 / 1016),
                 },
             },
         },
