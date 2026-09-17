@@ -4,13 +4,15 @@
 
 The spoils of war taint your surroundings; your violence now leaves bloodied marks on the environment. Low-HP players/NPCs also leave subtle blood trails.
 
+<p><a href="https://ko-fi.com/maxyari"><img src="imgs/head_like_a_hole_banner_left_half_bright148.webp" width="25.72%" align="top" alt="Support me on Ko-fi"></a><a href="https://ko-fi.com/maxyari"><img src="imgs/banner_right.png" width="73.88%" align="top" alt="Support me on Ko-fi"></a><br><a href="https://ko-fi.com/maxyari"><img src="imgs/banner_glow.png" width="99.6%" align="top" alt=""></a></p>
+
 ## ♦ How to install
 
 - **Requires OpenMW 0.51 or newer.**
 - Install it like any other OpenMW mod and enable `TheyBleed.omwscripts` in the "Content Files" tab of the OpenMW launcher. If this is your first OpenMW mod, [read this tutorial](https://modding-openmw.com/tips/installing-mods/).
 - Settings are in Options -> Scripts -> They Bleed.
 
-To uninstall, set "Max Decals" to 0 and save your game first, so no blood is left behind in your save.
+To uninstall, set "Max Decals" to 0 and save your game first, so no blood is left behind in your save. Then uninstall the mod.
 
 ## ♦ Compatibility
 
@@ -21,4 +23,4 @@ To uninstall, set "Max Decals" to 0 and save your game first, so no blood is lef
 
 Made with HEAVY AI assistance. Only this mod's logo was made completely by human hands, and, well, I also picked out myself that little sound that you might hear when the blood droplets hit the environment. The rest was just working with a coding AI, testing and correcting.
 
-<p><a href="https://ko-fi.com/maxyari"><img src="imgs/head_like_a_hole_banner_left_half_bright148.webp" width="25.72%" align="top" alt="Support me on Ko-fi"></a><a href="https://ko-fi.com/maxyari"><img src="imgs/banner_right.png" width="73.88%" align="top" alt="Support me on Ko-fi"></a><br><a href="https://ko-fi.com/maxyari"><img src="imgs/banner_glow.png" width="99.6%" align="top" alt=""></a></p>
+
