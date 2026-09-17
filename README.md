@@ -18,8 +18,8 @@ To uninstall, set "Max Decals" to 0 and save your game first, so no blood is lef
 
 ## ♦ Compatibility
 
-- [Diverse Blood](https://www.nexusmods.com/morrowind/mods/45368) is supported: blue, green, dark and orange blood leave decals of matching colour. Dust, sparks and energy leave none.
-- Should work with any mod that doesn't replace OpenMW's built-in combat blood effect.
+- [Diverse Blood](https://www.nexusmods.com/morrowind/mods/45368) is supported.
+- Should be compatible with pretty much anything.
 
 ## ♦ AI disclaimer
 
